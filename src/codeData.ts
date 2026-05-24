@@ -503,6 +503,6 @@ if __name__ == "__main__":
         print("Bot polling stopped by user.")
 `;
 
-export const REQUIREMENTS_CODE = `# Список зависимостей для бота:
-aiogram==2.25.1
+export const REQUIREMENTS_CODE = `aiogram==2.25.1
+aiohttp==3.10.11
 `;
