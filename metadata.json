@@ -1,0 +1,6 @@
+{
+  "name": "Family Telegram Bot Hub",
+  "description": "An interactive hub with production-ready code for your Family Budget & Shopping Telegram Bot, complete with a beginner-friendly Termux setup guide and a live interactive simulator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
