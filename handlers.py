@@ -1,244 +1,4 @@
-export const DATABASE_CODE = `import sqlite3
-from datetime import datetime
-
-DB_FILE = "family.db"
-
-def get_connection():
-    """Returns a connection to the SQLite database."""
-    return sqlite3.connect(DB_FILE)
-
-def init_db():
-    """Initializes the database, creating all tables if they don't exist yet."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Table 1: Users
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                telegram_id INTEGER PRIMARY KEY,
-                username TEXT,
-                role TEXT DEFAULT 'family_member'
-            );
-        """)
-        
-        # Table 2: Finance tracker
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS finance (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER,
-                amount REAL,
-                category TEXT,
-                description TEXT,
-                date TEXT
-            );
-        """)
-        
-        # Table 3: Shopping list
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS shopping_list (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_name TEXT,
-                added_by TEXT
-            );
-        """)
-
-        # Table 4: Family Calendar
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS calendar (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_text TEXT,
-                event_date TEXT,
-                added_by TEXT
-            );
-        """)
-        conn.commit()
-
-# Ensure database is initiated when this module is imported
-try:
-    init_db()
-except Exception as e:
-    print(f"Error initializing DB: {e}")
-
-def register_user(telegram_id: int, username: str):
-    """Registers a user if they don't already exist in the database."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,))
-            if not cursor.fetchone():
-                username_val = username if username else f"User_{telegram_id}"
-                cursor.execute(
-                    "INSERT INTO users (telegram_id, username, role) VALUES (?, ?, ?)",
-                    (telegram_id, username_val, "family_member")
-                )
-                conn.commit()
-    except Exception as e:
-        print(f"Error in register_user: {e}")
-
-def get_all_users():
-    """Returns a list of all registered users (dictionaries)."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT telegram_id, username, role FROM users")
-            rows = cursor.fetchall()
-            return [{"telegram_id": r[0], "username": r[1], "role": r[2]} for r in rows]
-    except Exception as e:
-        print(f"Error in get_all_users: {e}")
-        return []
-
-def add_expense(telegram_id: int, amount: float, category: str, description: str):
-    """Saves a new financial expense to the database."""
-    try:
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO finance (telegram_id, amount, category, description, date) VALUES (?, ?, ?, ?, ?)",
-                (telegram_id, amount, category, description, current_time)
-            )
-            conn.commit()
-            return True
-    except Exception as e:
-        print(f"Error in add_expense: {e}")
-        return False
-
-def get_monthly_report():
-    """Returns total sum of expenses for current month and breakdown by category."""
-    try:
-        current_month = datetime.now().strftime("%Y-%m")
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Total expenses
-            cursor.execute(
-                "SELECT SUM(amount) FROM finance WHERE date LIKE ?", 
-                (f"{current_month}%",)
-            )
-            total_row = cursor.fetchone()
-            total_sum = total_row[0] if total_row and total_row[0] is not None else 0.0
-            
-            # Expenses by category
-            cursor.execute(
-                "SELECT category, SUM(amount) FROM finance WHERE date LIKE ? GROUP BY category", 
-                (f"{current_month}%",)
-            )
-            categories_rows = cursor.fetchall()
-            categories = {row[0]: row[1] for row in categories_rows}
-            
-            # Expenses with usernames
-            cursor.execute("""
-                SELECT u.username, SUM(f.amount) 
-                FROM finance f
-                LEFT JOIN users u ON f.telegram_id = u.telegram_id
-                WHERE f.date LIKE ?
-                GROUP BY f.telegram_id
-            """, (f"{current_month}%",))
-            users_spent_rows = cursor.fetchall()
-            users_spent = {row[0] if row[0] else "Неизвестно": row[1] for row in users_spent_rows}
-            
-            return {
-                "total": total_sum,
-                "categories": categories,
-                "users_spent": users_spent,
-                "month_name": datetime.now().strftime("%B %Y")
-            }
-    except Exception as e:
-        print(f"Error in get_monthly_report: {e}")
-        return {"total": 0.0, "categories": {}, "users_spent": {}, "month_name": datetime.now().strftime("%B %Y")}
-
-def add_shopping_item(item_name: str, added_by: str):
-    """Adds a new item to the mutual shopping list."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO shopping_list (item_name, added_by) VALUES (?, ?)",
-                (item_name, added_by)
-            )
-            conn.commit()
-            return True
-    except Exception as e:
-        print(f"Error in add_shopping_item: {e}")
-        return False
-
-def get_shopping_list():
-    """Returns a list of all active items in the shopping list."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, item_name, added_by FROM shopping_list ORDER BY id ASC")
-            rows = cursor.fetchall()
-            return [{"id": r[0], "item_name": r[1], "added_by": r[2]} for r in rows]
-    except Exception as e:
-        print(f"Error in get_shopping_list: {e}")
-        return []
-
-def delete_shopping_item(item_id: int):
-    """Deletes an item from the shopping list by its ID."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM shopping_list WHERE id = ?", (item_id,))
-            conn.commit()
-            return True
-    except Exception as e:
-        print(f"Error in delete_shopping_item: {e}")
-        return False
-
-def clear_shopping_list():
-    """Clears all items in the shopping list."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM shopping_list")
-            conn.commit()
-            return True
-    except Exception as e:
-        print(f"Error in clear_shopping_list: {e}")
-        return False
-
-def add_calendar_event(event_text: str, event_date: str, added_by: str):
-    """Adds a family event/reminder to the calendar."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO calendar (event_text, event_date, added_by) VALUES (?, ?, ?)",
-                (event_text, event_date, added_by)
-            )
-            conn.commit()
-            return True
-    except Exception as e:
-        print(f"Error in add_calendar_event: {e}")
-        return False
-
-def get_calendar_events():
-    """Returns a list of all forward events sorted by date."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, event_text, event_date, added_by FROM calendar ORDER BY event_date ASC")
-            rows = cursor.fetchall()
-            return [{"id": r[0], "event_text": r[1], "event_date": r[2], "added_by": r[3]} for r in rows]
-    except Exception as e:
-        print(f"Error in get_calendar_events: {e}")
-        return []
-
-def delete_calendar_event(event_id: int):
-    """Removes a calendar event by ID."""
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM calendar WHERE id = ?", (event_id,))
-            conn.commit()
-            return True
-    except Exception as e:
-        print(f"Error in delete_calendar_event: {e}")
-        return False
-`;
-
-export const HANDLERS_CODE = `import asyncio
+import asyncio
 import logging
 import random
 from aiogram import Dispatcher, types
@@ -291,12 +51,12 @@ async def send_main_menu(message: types.Message, user_id: int, first_name: str, 
     database.register_user(user_id, name)
 
     welcome_text = (
-        f"🙋‍♂️ **Семейный Центр Управления**\\n"
-        f"💼 Рады видеть вас, *{first_name}*!\\n"
-        f"─────────────────────────\\n"
+        f"🙋‍♂️ **Семейный Центр Управления**\n"
+        f"💼 Рады видеть вас, *{first_name}*!\n"
+        f"─────────────────────────\n"
         f"Интерактивный хаб для ведения домашнего хозяйства, общего бюджета "
         f"и совместных планов в реальном времени. Все изменения мгновенно "
-        f"синхронизируются для всех участников семьи.\\n\\n"
+        f"синхронизируются для всех участников семьи.\n\n"
         f"📎 *Выберите модуль управления на панели ниже:*🗣"
     )
     await message.answer(
@@ -325,11 +85,11 @@ async def cb_main_menu(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer()
     
     welcome_text = (
-        f"🙋‍♂️ **Семейный Центр Управления**\\n"
-        f"💼 Рады видеть вас, *{callback_query.from_user.first_name}*!\\n"
-        f"─────────────────────────\\n"
+        f"🙋‍♂️ **Семейный Центр Управления**\n"
+        f"💼 Рады видеть вас, *{callback_query.from_user.first_name}*!\n"
+        f"─────────────────────────\n"
         f"Интерактивный хаб для ведения домашнего хозяйства, общего бюджета "
-        f"и совместных планов в реальном времени.\\n\\n"
+        f"и совместных планов в реальном времени.\n\n"
         f"📎 *Выберите модуль управления на панели ниже:*🗣"
     )
     await callback_query.message.edit_text(
@@ -362,28 +122,28 @@ async def cb_menu_finance(callback_query: types.CallbackQuery, state: FSMContext
     for standard_cat in ["Продукты", "ЖКХ", "Машина", "Другое"]:
         amount_spent = categories.get(standard_cat, 0.0)
         icon = cat_icons.get(standard_cat, "🔹")
-        category_details += f"{icon} {standard_cat}: **{amount_spent:,.2f} руб.**\\n"
+        category_details += f"{icon} {standard_cat}: **{amount_spent:,.2f} руб.**\n"
 
     for cat, amount_spent in categories.items():
         if cat not in ["Продукты", "ЖКХ", "Машина", "Другое"]:
-            category_details += f"🔹 {cat}: **{amount_spent:,.2f} руб.**\\n"
+            category_details += f"🔹 {cat}: **{amount_spent:,.2f} руб.**\n"
 
     users_details = ""
     if users_spent:
         for user, amt in users_spent.items():
-            users_details += f"👤 {user}: **{amt:,.2f} руб.**\\n"
+            users_details += f"👤 {user}: **{amt:,.2f} руб.**\n"
     else:
         users_details = "Участники пока ничего не тратили."
 
     finance_text = (
-        f"💰 **Семейный Бюджет и Траты**\\n"
-        f"🗓 **Период:** {month_name}\\n"
-        f"─────────────────────────\\n"
-        f"💳 **Всего потрачено семьей:** {total:,.2f} руб.\\n\\n"
-        f"📂 **Расходы по категориям:**\\n"
-        f"{category_details if category_details else 'Нет записей в текущем месяце.'}\\n"
-        f"─────────────────────────\\n"
-        f"👤 **Вклад участников:**\\n"
+        f"💰 **Семейный Бюджет и Траты**\n"
+        f"🗓 **Период:** {month_name}\n"
+        f"─────────────────────────\n"
+        f"💳 **Всего потрачено семьей:** {total:,.2f} руб.\n\n"
+        f"📂 **Расходы по категориям:**\n"
+        f"{category_details if category_details else 'Нет записей в текущем месяце.'}\n"
+        f"─────────────────────────\n"
+        f"👤 **Вклад участников:**\n"
         f"{users_details}"
     )
 
@@ -402,9 +162,9 @@ async def cb_finance_add_init(callback_query: types.CallbackQuery, state: FSMCon
     
     kb = InlineKeyboardMarkup().add(get_back_button("menu_finance"))
     await callback_query.message.edit_text(
-        "💰 **Добавление нового расхода • Шаг 1 из 3**\\n"
-        "─────────────────────────\\n"
-        "✍️ Пожалуйста, введите **сумму** вашего расхода (например, \`450\` или \`1250.50\`):",
+        "💰 **Добавление нового расхода • Шаг 1 из 3**\n"
+        "─────────────────────────\n"
+        "✍️ Пожалуйста, введите **сумму** вашего расхода (например, `450` или `1250.50`):",
         parse_mode="Markdown",
         reply_markup=kb
     )
@@ -432,15 +192,15 @@ async def process_finance_amount(message: types.Message, state: FSMContext):
         kb.row(get_back_button("menu_finance"))
         
         await message.reply(
-            f"💵 **Сумма:** {amount:,.2f} руб.\\n"
-            f"─────────────────────────\\n"
-            f"📂 **Добавление расхода • Шаг 2 из 3**\\n"
+            f"💵 **Сумма:** {amount:,.2f} руб.\n"
+            f"─────────────────────────\n"
+            f"📂 **Добавление расхода • Шаг 2 из 3**\n"
             f"Выделите одну из основных категорий расходов ниже:",
             parse_mode="Markdown",
             reply_markup=kb
         )
     except ValueError:
-        await message.reply("⚠️ Формат числа не распознан. Наберите числовое значение, например \`750\` или \`1240.50\`:")
+        await message.reply("⚠️ Формат числа не распознан. Наберите числовое значение, например `750` или `1240.50`:")
 
 
 async def cb_finance_select_category(callback_query: types.CallbackQuery, state: FSMContext):
@@ -453,9 +213,9 @@ async def cb_finance_select_category(callback_query: types.CallbackQuery, state:
     
     kb = InlineKeyboardMarkup().add(get_back_button("menu_finance"))
     await callback_query.message.edit_text(
-        f"📂 **Категория:** {category}\\n"
-        f"─────────────────────────\\n"
-        f"📂 **Добавление расхода • Шаг 3 из 3**\\n"
+        f"📂 **Категория:** {category}\n"
+        f"─────────────────────────\n"
+        f"📂 **Добавление расхода • Шаг 3 из 3**\n"
         f"✍️ Напишите краткое описание или цель расхода (например, 'Купила сыр и овощи' или 'Оплата интернета'):",
         parse_mode="Markdown",
         reply_markup=kb
@@ -463,7 +223,7 @@ async def cb_finance_select_category(callback_query: types.CallbackQuery, state:
 
 
 async def process_finance_description(message: types.Message, state: FSMContext):
-    """Saves final expenditure inside SQLite database."""
+    """Saves final expenditure inside SQLite SQLite database."""
     description = message.text.strip()
     user_data = await state.get_data()
     
@@ -480,17 +240,17 @@ async def process_finance_description(message: types.Message, state: FSMContext)
             get_back_button()
         )
         await message.reply(
-            f"✅ **Успешно записано!**\\n"
-            f"─────────────────────────\\n"
-            f"💵 **Сумма:** {amount:,.2f} руб.\\n"
-            f"📂 **Категория:** {category}\\n"
-            f"📝 **Что взяли:** {description}\\n\\n"
+            f"✅ **Успешно записано!**\n"
+            f"─────────────────────────\n"
+            f"💵 **Скидка/Сумма:** {amount:,.2f} руб.\n"
+            f"📂 **Категория:** {category}\n"
+            f"📝 **Что взяли:** {description}\n\n"
             f"Все данные зафиксированы в общей SQLite базе.",
             parse_mode="Markdown",
             reply_markup=kb
         )
     else:
-        await message.reply("⚠️ Ошибка SQLite при внесении данных.", reply_markup=get_main_menu_keyboard())
+        await message.reply("⚠️ Ошибка базы данных при внесении данных.", reply_markup=get_main_menu_keyboard())
 
 # --- 2. Shopping Tracker Module ---
 
@@ -498,15 +258,15 @@ async def send_shopping_list_view(message: types.Message):
     """Sends current active list with deletion callbacks."""
     items = database.get_shopping_list()
     
-    body = "📝 **Семейный список покупок**\\n"
-    body += "─────────────────────────\\n"
+    body = "📝 **Семейный список покупок**\n"
+    body += "─────────────────────────\n"
     
     kb = InlineKeyboardMarkup(row_width=1)
     
     if not items:
         body += "🛒 Список покупок в данный момент пуст! Всё куплено."
     else:
-        body += "Вычеркивайте купленные товары кликом по ним:\\n\\n"
+        body += "Вычеркивайте купленные товары кликом по ним:\n\n"
         for item in items:
             btn_text = f"❌ {item['item_name']} (от {item['added_by']})"
             kb.add(InlineKeyboardButton(btn_text, callback_data=f"shop_buy_{item['id']}"))
@@ -525,16 +285,17 @@ async def cb_menu_shopping(callback_query: types.CallbackQuery, state: FSMContex
     await state.finish()
     await callback_query.answer()
     
+    # Inline updates prevent chat clutter
     items = database.get_shopping_list()
-    body = "📝 **Семейный список покупок**\\n"
-    body += "─────────────────────────\\n"
+    body = "📝 **Семейный список покупок**\n"
+    body += "─────────────────────────\n"
     
     kb = InlineKeyboardMarkup(row_width=1)
     
     if not items:
         body += "🛒 Список покупок в данный момент пуст! Всё куплено."
     else:
-        body += "Вычеркивайте купленные товары кликом по ним:\\n\\n"
+        body += "Вычеркивайте купленные товары кликом по ним:\n\n"
         for item in items:
             btn_text = f"❌ {item['item_name']} (от {item['added_by']})"
             kb.add(InlineKeyboardButton(btn_text, callback_data=f"shop_buy_{item['id']}"))
@@ -555,6 +316,7 @@ async def cb_shop_buy(callback_query: types.CallbackQuery):
     success = database.delete_shopping_item(item_id)
     if success:
         await callback_query.answer("🟢 Поздравляем, товар куплен и вычеркнут!", show_alert=False)
+        # Redraw
         try:
             await callback_query.message.delete()
         except Exception:
@@ -575,8 +337,8 @@ async def cb_shop_clear_confirm(callback_query: types.CallbackQuery):
     )
     
     await callback_query.message.edit_text(
-        "⚠️ **Внимание: Полная очистка списка**\\n"
-        "─────────────────────────\\n"
+        "⚠️ **Внимание: Полная очистка списка**\n"
+        "─────────────────────────\n"
         "Вы действительно хотите навсегда стереть ВСЕ товары из семейного списка?",
         parse_mode="Markdown",
         reply_markup=kb
@@ -602,9 +364,9 @@ async def cb_shop_add_init(callback_query: types.CallbackQuery, state: FSMContex
     
     kb = InlineKeyboardMarkup().add(get_back_button("menu_shopping"))
     await callback_query.message.edit_text(
-        "📝 **Добавление покупки в список**\\n"
-        "─────────────────────────\\n"
-        "✍️ Напишите название товара или продукта, который необходимо купить (например: \`Багет хрустящий\` или \`Зубная паста\`):",
+        "📝 **Добавление покупки в список**\n"
+        "─────────────────────────\n"
+        "✍️ Напишите название товара или продукта, который необходимо купить (например: `Багет хрустящий` или `Зубная паста`):",
         parse_mode="Markdown",
         reply_markup=kb
     )
@@ -633,21 +395,21 @@ async def send_calendar_view(message: types.Message):
     """Renders calendar tasks."""
     events = database.get_calendar_events()
     
-    body = "📅 **Семейный Календарь & Важные Даты**\\n"
-    body += "─────────────────────────\\n"
+    body = "📅 **Семейный Календарь & Важные Даты**\n"
+    body += "─────────────────────────\n"
     
     kb = InlineKeyboardMarkup(row_width=1)
     
     if not events:
         body += "⛱ Нет запланированных событий или важных дат! Добавьте новые, чтобы не забыть."
     else:
-        body += "Предстоящие дела и семейные праздники:\\n\\n"
+        body += "Предстоящие дела и семейные праздники:\n\n"
         for ev in events:
             date_part = ev['event_date']
-            body += f"🔹 **[{date_part}]** {ev['event_text']} _(от {ev['added_by']})_\\n"
+            body += f"🔹 **[{date_part}]** {ev['event_text']} _(от {ev['added_by']})_\n"
             kb.add(InlineKeyboardButton(f"🗑 Удалить [{date_part}]", callback_data=f"cal_del_{ev['id']}"))
             
-    body += "\\n"
+    body += "\n"
     kb.row(
         InlineKeyboardButton("🗓 Добавить событие", callback_data="cal_add_init"),
         get_back_button()
@@ -662,20 +424,20 @@ async def cb_menu_calendar(callback_query: types.CallbackQuery, state: FSMContex
     await callback_query.answer()
     
     events = database.get_calendar_events()
-    body = "📅 **Семейный Календарь & Важные Даты**\\n"
-    body += "─────────────────────────\\n"
+    body = "📅 **Семейный Календарь & Важные Даты**\n"
+    body += "─────────────────────────\n"
     
     kb = InlineKeyboardMarkup(row_width=1)
     if not events:
         body += "⛱ Нет запланированных событий или важных дат! Добавьте новые, чтобы не забыть."
     else:
-        body += "Предстоящие дела и семейные праздники:\\n\\n"
+        body += "Предстоящие дела и семейные праздники:\n\n"
         for ev in events:
             date_part = ev['event_date']
-            body += f"🔹 **[{date_part}]** {ev['event_text']} _(от {ev['added_by']})_\\n"
+            body += f"🔹 **[{date_part}]** {ev['event_text']} _(от {ev['added_by']})_\n"
             kb.add(InlineKeyboardButton(f"🗑 Удалить: {ev['event_text'][:20]}...", callback_data=f"cal_del_{ev['id']}"))
             
-    body += "\\n"
+    body += "\n"
     kb.row(
         InlineKeyboardButton("🗓 Добавить событие", callback_data="cal_add_init"),
         get_back_button()
@@ -707,9 +469,9 @@ async def cb_calendar_add_init(callback_query: types.CallbackQuery, state: FSMCo
     
     kb = InlineKeyboardMarkup().add(get_back_button("menu_calendar"))
     await callback_query.message.edit_text(
-        "📅 **Новое Семейное Событие • Шаг 1 из 2**\\n"
-        "─────────────────────────\\n"
-        "✍️ Введите **дату** события (например, \`24.05\`, \`30 Июня\` или \`Каждую пятницу\`):",
+        "📅 **Новое Семейное Событие • Шаг 1 из 2**\n"
+        "─────────────────────────\n"
+        "✍️ Введите **дату** события (например, `24.05`, `30 Июня` или `Каждую пятницу`):",
         parse_mode="Markdown",
         reply_markup=kb
     )
@@ -727,9 +489,9 @@ async def process_calendar_date(message: types.Message, state: FSMContext):
     
     kb = InlineKeyboardMarkup().add(get_back_button("menu_calendar"))
     await message.reply(
-        f"🗓 **Дата зарегистрирована:** {date_text}\\n"
-        f"─────────────────────────\\n"
-        f"📅 **Новое Семейное Событие • Шаг 2 из 2**\\n"
+        f"🗓 **Дата зарегистрирована:** {date_text}\n"
+        f"─────────────────────────\n"
+        f"📅 **Новое Семейное Событие • Шаг 2 из 2**\n"
         f"✍️ Напишите описание события (напр. 'День Рождения Папы 🎉' или 'Запись к стоматологу 🦷'):",
         parse_mode="Markdown",
         reply_markup=kb
@@ -765,18 +527,18 @@ async def cb_menu_duty(callback_query: types.CallbackQuery, state: FSMContext):
     family_members_list = ""
     if users:
          for idx, u in enumerate(users, start=1):
-             family_members_list += f"{idx}. 👤 **{u['username']}**\\n"
+             family_members_list += f"{idx}. 👤 **{u['username']}**\n"
     else:
          family_members_list = "База участников пока пуста. Запустите бота первыми!"
 
     duty_text = (
-        f"🧹 **Дежурный по Дому • Выбор судьбы**\\n"
-        f"─────────────────────────\\n"
+        f"🧹 **Дежурный по Дому • Выбор судьбы**\n"
+        f"─────────────────────────\n"
         f"Надоело спорить, кто сегодня моет посуду, выносит мусор или убирает гостиную? "
-        f"Доверьте это авторитету беспристрастного великого жребия! 🎲\\n\\n"
-        f"Список домашних участников (кандидатов):\\n"
-        f"{family_members_list}\\n"
-        f"─────────────────────────\\n"
+        f"Доверьте это авторитету беспристрастного великого жребия! 🎲\n\n"
+        f"Список домашних участников (кандидатов):\n"
+        f"{family_members_list}\n"
+        f"─────────────────────────\n"
         f"Нажмите кнопку ниже, чтобы запустить анимированную крутилку судьбы!"
     )
     
@@ -794,6 +556,7 @@ async def cb_duty_roll_dice(callback_query: types.CallbackQuery):
     
     users = database.get_all_users()
     if not users:
+        # Fallback to current user if none found
         cur_id = callback_query.from_user.id
         cur_name = callback_query.from_user.username or callback_query.from_user.first_name or f"User_{cur_id}"
         database.register_user(cur_id, cur_name)
@@ -801,33 +564,36 @@ async def cb_duty_roll_dice(callback_query: types.CallbackQuery):
         
     names = [u["username"] for u in users]
     
+    # Let's perform a delightful text-changing delay simulation (asyncio.sleep)
     animations = [
-        "🎲 **Кубик подлетает...**\\n───◯───",
-        "✨ **Судьба перебирает варианты...**\\n───●───",
-        "🧼 **Трём мыло и готовим щётки...**\\n───◯───",
-        "🌀 **Крутится барабан пылесоса...**\\n───●───"
+        "🎲 **Кубик подлетает...**\n───◯───",
+        "✨ **Судьба перебирает варианты...**\n───●───",
+        "🧼 **Трём мыло и готовим щётки...**\n───◯───",
+        "🌀 **Крутится барабан пылесоса...**\n───●───"
     ]
     
     for anim in animations:
         try:
             await callback_query.message.edit_text(
-                f"🧹 **Дежурный по Дому**\\n"
-                f"─────────────────────────\\n"
+                f"🧹 **Дежурный по Дому**\n"
+                f"─────────────────────────\n"
                 f"{anim}",
                 parse_mode="Markdown"
             )
             await asyncio.sleep(0.5)
         except Exception:
+            # Skip if error occurs
             pass
             
+    # Draw real winner
     winner = random.choice(names)
     
     final_text = (
-        f"🧹 **Дежурный по Дому • Жребий брошен!**\\n"
-        f"─────────────────────────\\n"
-        f"🎉 Барабанная дробь стихла...\\n\\n"
-        f"🧼 Нашим сегодняшним дежурным по дому назначается:\\n"
-        f"👑 **{winner}**! 🧹🍳🍕\\n\\n"
+        f"🧹 **Дежурный по Дому • Жребий брошен!**\n"
+        f"─────────────────────────\n"
+        f"🎉 Барабанная дробь стихла...\n\n"
+        f"🧼 Нашим сегодняшним дежурным по дому назначается:\n"
+        f"👑 **{winner}**! 🧹🍳🍕\n\n"
         f"Желаем удачи и отличного настроения при наведении чистоты!"
     )
     
@@ -877,63 +643,3 @@ def register_family_handlers(dp: Dispatcher):
     
     # 4. Duty Lottery Callbacks
     dp.register_callback_query_handler(cb_duty_roll_dice, lambda c: c.data == "duty_roll_dice", state="*")
-`;
-
-export const BOT_CODE = `import logging
-import os
-import sys
-from aiogram import Bot, Dispatcher, executor
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
-
-# Import local handlers and database creation
-import database
-from handlers import register_family_handlers
-
-# Configure Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
-
-# Fetch Token from Environment Variable
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-if not BOT_TOKEN:
-    logger.critical("BOT_TOKEN environment variable is not defined! Please configure BOT_TOKEN.")
-    BOT_TOKEN = "PLACEHOLDER_TOKEN"
-
-# Initialize SQLite tables
-try:
-    database.init_db()
-    logger.info("SQLite Database successfully initialized.")
-except Exception as e:
-    logger.error(f"Error initializing SQLite DB: {e}")
-
-# Initialize core bot components
-bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)
-
-# Register premium modules and FSM transitions
-register_family_handlers(dp)
-
-if __name__ == "__main__":
-    if BOT_TOKEN == "PLACEHOLDER_TOKEN" or not BOT_TOKEN:
-        print("\\n" + "="*60)
-        print("⚠️  ERROR: BOT_TOKEN is missing!")
-        print("Please configure BOT_TOKEN environment variable correctly before running.")
-        print("Example: export BOT_TOKEN='your_telegram_bot_token'")
-        print("="*60 + "\\n")
-    else:
-        logger.info("Starting Telegram Family Hub Bot polling...")
-        try:
-            executor.start_polling(dp, skip_updates=True)
-        except KeyboardInterrupt:
-            print("Bot polling stopped by user.")
-`;
-
-export const REQUIREMENTS_CODE = `aiogram==2.25.1
-aiohttp==3.10.11
-`;
