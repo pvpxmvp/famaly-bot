@@ -529,6 +529,26 @@ if __name__ == "__main__":
         print("Bot polling stopped by user.")
 `;
 
-export const REQUIREMENTS_CODE = `# Telegram Family Bot dependencies
+export const REQUIREMENTS_CODE = `# =====================================================================
+# 🛠️ ИНСТРУКЦИЯ ДЛЯ TERMUX (АНДРОИД): КАК ИЗБЕЖАТЬ ОШИБКИ КОР ПАКЕТА PYDANTIC-CORE
+# =====================================================================
+# Так как pydantic-core требует компилятор Rust, в чистом Termux обычный
+# "pip install" упадет с ошибкой. Чтобы установить всё БЕЗ ошибок, перед запуском 
+# установки выполните ОДНО ИЗ двух простых решений прямо в терминале Termux:
+#
+# РЕШЕНИЕ 1 (Самое легкое и быстрое - рекомендованное):
+# Установите готовый скомпилированный Pydantic из репозитория Termux User Repository:
+#   pkg update && pkg install tur-repo -y
+#   pkg install python-pydantic -y
+#   pip install aiogram>=3.3.0,<4.0.0
+#
+# РЕШЕНИЕ 2 (Классическое - компиляция Rust прямо на телефоне):
+# Установите компиляторы во внутреннюю систему Termux, чтобы pip сам всё собрал:
+#   pkg update && pkg install build-essential clang rust -y
+#   pip install -r requirements.txt
+# =====================================================================
+
+# Список зависимостей для бота:
 aiogram>=3.3.0,<4.0.0
+pydantic>=2.0.0,<3.0.0
 `;
