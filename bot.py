@@ -1,18 +1,17 @@
-import asyncio
 import logging
 import os
 import sys
-from aiogram import Bot, Dispatcher, Router, F, types
-from aiogram.filters import CommandStart, StateFilter
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters import Text
+from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
-from aiogram.fsm.storage.memory import MemoryStorage
 
 # Import local database functions
 import database
@@ -30,13 +29,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
     logger.critical("BOT_TOKEN environment variable is not defined! Please set BOT_TOKEN.")
-    # We do not crash here so the file can be inspected, but explain it clearly
     BOT_TOKEN = "PLACEHOLDER_TOKEN"
 
-# Initialize bot and dispatcher
+# Initialize bot and dispatcher with MemoryStorage
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-router = Router()
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 
 # Define States for FSM
 class ExpenseState(StatesGroup):
@@ -50,24 +48,16 @@ class ShoppingState(StatesGroup):
 # --- Main Keyboards ---
 def get_main_menu_keyboard():
     """Returns the persistent bottom reply keyboard."""
-    kb = [
-        [
-            KeyboardButton(text="💰 Финансы"),
-            KeyboardButton(text="📝 Список покупок")
-        ]
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard=kb,
-        resize_keyboard=True,
-        placeholder="Выберите действие из меню..."
-    )
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, placeholder="Выберите действие из меню...")
+    keyboard.row(KeyboardButton("💰 Финансы"), KeyboardButton("📝 Список покупок"))
+    return keyboard
 
 # --- Handlers ---
 
-@router.message(CommandStart())
+@dp.message_handler(commands=['start'], state='*')
 async def cmd_start(message: types.Message, state: FSMContext):
     """Handles the /start command, registering the user and displaying the menu."""
-    await state.clear()
+    await state.finish()
     
     user_id = message.from_user.id
     username = message.from_user.username or message.from_user.first_name or f"User_{user_id}"
@@ -89,10 +79,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard())
 
 
-@router.message(F.text == "💰 Финансы")
+@dp.message_handler(lambda message: message.text == "💰 Финансы", state='*')
 async def process_finance_menu(message: types.Message, state: FSMContext):
     """Displays financial stats for the current month and an add expense button."""
-    await state.clear()
+    await state.finish()
     report = database.get_monthly_report()
     
     total = report["total"]
@@ -127,20 +117,17 @@ async def process_finance_menu(message: types.Message, state: FSMContext):
     )
     
     # Inline button to initiate expense adding
-    inline_kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить расход", callback_data="add_expense_init")]
-        ]
-    )
+    inline_kb = InlineKeyboardMarkup()
+    inline_kb.add(InlineKeyboardButton(text="➕ Добавить расход", callback_data="add_expense_init"))
     
     await message.answer(response_text, parse_mode="Markdown", reply_markup=inline_kb)
 
 
-@router.callback_query(F.data == "add_expense_init")
+@dp.callback_query_handler(lambda c: c.data == "add_expense_init", state='*')
 async def start_add_expense(callback_query: types.CallbackQuery, state: FSMContext):
     """Triggered upon clicking '[➕ Добавить расход]'. Starts FSM loop."""
     await callback_query.answer()
-    await state.set_state(ExpenseState.waiting_for_amount)
+    await ExpenseState.waiting_for_amount.set()
     
     await callback_query.message.answer(
         "✍️ **Шаг 1 из 3:** Введите сумму расхода (числовое значение, например: 450 или 1200.50):",
@@ -148,7 +135,7 @@ async def start_add_expense(callback_query: types.CallbackQuery, state: FSMConte
     )
 
 
-@router.message(StateFilter(ExpenseState.waiting_for_amount))
+@dp.message_handler(state=ExpenseState.waiting_for_amount)
 async def process_expense_amount(message: types.Message, state: FSMContext):
     """Processes expenditure sum input and handles float conversion errors."""
     raw_text = message.text.strip().replace(",", ".") # support comma separator
@@ -163,20 +150,15 @@ async def process_expense_amount(message: types.Message, state: FSMContext):
         await state.update_data(amount=amount)
         
         # Move to categories choice
-        await state.set_state(ExpenseState.waiting_for_category)
+        await ExpenseState.next()
         
         # Build category selection inline buttons
-        inline_kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="🛒 Продукты", callback_data="set_cat_Продукты"),
-                    InlineKeyboardButton(text="🔌 ЖКХ", callback_data="set_cat_ЖКХ")
-                ],
-                [
-                    InlineKeyboardButton(text="🚗 Машина", callback_data="set_cat_Машина"),
-                    InlineKeyboardButton(text="📦 Другое", callback_data="set_cat_Другое")
-                ]
-            ]
+        inline_kb = InlineKeyboardMarkup(row_width=2)
+        inline_kb.add(
+            InlineKeyboardButton(text="🛒 Продукты", callback_data="set_cat_Продукты"),
+            InlineKeyboardButton(text="🔌 ЖКХ", callback_data="set_cat_ЖКХ"),
+            InlineKeyboardButton(text="🚗 Машина", callback_data="set_cat_Машина"),
+            InlineKeyboardButton(text="📦 Другое", callback_data="set_cat_Другое")
         )
         
         await message.answer(
@@ -190,14 +172,14 @@ async def process_expense_amount(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Не удалось распознать число. Пожалуйста, введите корректную сумму (например: 750 или 140.25):")
 
 
-@router.callback_query(StateFilter(ExpenseState.waiting_for_category), F.data.startswith("set_cat_"))
+@dp.callback_query_handler(lambda c: c.data.startswith("set_cat_"), state=ExpenseState.waiting_for_category)
 async def process_expense_category(callback_query: types.CallbackQuery, state: FSMContext):
     """Processes category inline button click."""
     await callback_query.answer()
     category = callback_query.data.split("set_cat_")[1]
     
     await state.update_data(category=category)
-    await state.set_state(ExpenseState.waiting_for_description)
+    await ExpenseState.next()
     
     # Notify choice and guide to step 3
     await callback_query.message.edit_text(
@@ -207,7 +189,7 @@ async def process_expense_category(callback_query: types.CallbackQuery, state: F
     )
 
 
-@router.message(StateFilter(ExpenseState.waiting_for_description))
+@dp.message_handler(state=ExpenseState.waiting_for_description)
 async def process_expense_description(message: types.Message, state: FSMContext):
     """Saves final expenditure details inside SQLite database."""
     description = message.text.strip()
@@ -236,13 +218,13 @@ async def process_expense_description(message: types.Message, state: FSMContext)
             reply_markup=get_main_menu_keyboard()
         )
         
-    await state.clear()
+    await state.finish()
 
 
-@router.message(F.text == "📝 Список покупок")
+@dp.message_handler(lambda message: message.text == "📝 Список покупок", state='*')
 async def show_shopping_list(message: types.Message, state: FSMContext):
     """Displays current shopping list, each having an inline complete callback."""
-    await state.clear()
+    await state.finish()
     await send_or_update_shopping_list(message)
 
 
@@ -256,11 +238,8 @@ async def send_or_update_shopping_list(message: types.Message):
             "🛒 На данный момент в списке нет товаров! Все куплено.\n\n"
             "Нажмите кнопку ниже, чтобы добавить первую покупку!"
         )
-        inline_kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="➕ Добавить в список", callback_data="add_shopping_init")]
-            ]
-        )
+        inline_kb = InlineKeyboardMarkup()
+        inline_kb.add(InlineKeyboardButton(text="➕ Добавить в список", callback_data="add_shopping_init"))
         await message.answer(text, parse_mode="Markdown", reply_markup=inline_kb)
     else:
         text = (
@@ -268,39 +247,34 @@ async def send_or_update_shopping_list(message: types.Message):
             "Вычеркивайте купленные товары кликом по кнопкам ниже:\n\n"
         )
         
+        inline_kb = InlineKeyboardMarkup(row_width=1)
         # Build list containing each shopping item with interactive removal buttons
-        kb_rows = []
-        for index, item in enumerate(shopping_items, start=1):
-            item_text = f"🛒 {item['item_name']} (от {item['added_by']})"
-            # Each cross clears item on click
-            kb_rows.append([
-                InlineKeyboardButton(
-                    text=f"❌ {item_text}", 
-                    callback_data=f"buy_item_{item['id']}"
-                )
-            ])
+        for item in shopping_items:
+            item_text = f"❌ 🛒 {item['item_name']} (от {item['added_by']})"
+            inline_kb.add(
+                InlineKeyboardButton(text=item_text, callback_data=f"buy_item_{item['id']}")
+            )
             
         # Append addition option at the end
-        kb_rows.append([
+        inline_kb.add(
             InlineKeyboardButton(text="➕ Добавить в список", callback_data="add_shopping_init")
-        ])
+        )
         
-        inline_kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
         await message.answer(text, parse_mode="Markdown", reply_markup=inline_kb)
 
 
-@router.callback_query(F.data == "add_shopping_init")
+@dp.callback_query_handler(lambda c: c.data == "add_shopping_init", state='*')
 async def start_add_shopping(callback_query: types.CallbackQuery, state: FSMContext):
     """Initiates shopping adding dialog via FSM."""
     await callback_query.answer()
-    await state.set_state(ShoppingState.waiting_for_item)
+    await ShoppingState.waiting_for_item.set()
     
     await callback_query.message.answer(
         "✍️ Введите название товара или продукта, который необходимо купить (например: 'Сыр Ламбер 300г' или 'Стиральный порошок'):"
     )
 
 
-@router.message(StateFilter(ShoppingState.waiting_for_item))
+@dp.message_handler(state=ShoppingState.waiting_for_item)
 async def process_shopping_item_name(message: types.Message, state: FSMContext):
     """Filing new item inside SQLite shopping list."""
     item_name = message.text.strip()
@@ -312,7 +286,7 @@ async def process_shopping_item_name(message: types.Message, state: FSMContext):
     added_by = message.from_user.username or message.from_user.first_name or f"User_{message.from_user.id}"
     
     success = database.add_shopping_item(item_name, added_by)
-    await state.clear()
+    await state.finish()
     
     if success:
         await message.answer(f"✅ Товар '**{item_name}**' успешно добавлен в семейный список!", parse_mode="Markdown")
@@ -322,7 +296,7 @@ async def process_shopping_item_name(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Не удалось сохранить товар из-за сбоя базы данных.", reply_markup=get_main_menu_keyboard())
 
 
-@router.callback_query(F.data.startswith("buy_item_"))
+@dp.callback_query_handler(lambda c: c.data.startswith("buy_item_"), state='*')
 async def process_purchase(callback_query: types.CallbackQuery):
     """Deregister (deletes) purchased item using its database representation ID."""
     item_id = int(callback_query.data.split("buy_item_")[1])
@@ -335,7 +309,6 @@ async def process_purchase(callback_query: types.CallbackQuery):
         await callback_query.answer("🟢 Куплено и убрано из списка!", show_alert=False)
         
         # We can update the message list instantly so it stays clean and interactive!
-        # Delete old message to avoid spam or edit it. Let's send a new updated list and delete the old one
         try:
             await callback_query.message.delete()
         except Exception:
@@ -346,18 +319,6 @@ async def process_purchase(callback_query: types.CallbackQuery):
         await callback_query.answer("⚠️ Товар уже был куплен или удален!", show_alert=True)
 
 
-# --- Bot Initialization and Lifespan ---
-
-async def main():
-    # Register router
-    dp.include_router(router)
-    
-    # Clear webhook of potential old runs and start polling
-    logger.info("Starting Telegram Bot Polling...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-
 if __name__ == "__main__":
     if BOT_TOKEN == "PLACEHOLDER_TOKEN" or not BOT_TOKEN:
         print("\n" + "="*60)
@@ -366,6 +327,6 @@ if __name__ == "__main__":
         print("Example: export BOT_TOKEN='your_telegram_bot_token'")
         print("="*60 + "\n")
     try:
-        asyncio.run(main())
+        executor.start_polling(dp, skip_updates=True)
     except KeyboardInterrupt:
         print("Bot polling stopped by user.")
